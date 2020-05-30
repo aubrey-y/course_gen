@@ -28,4 +28,7 @@ install:
 
 script:
   - pytest
-  - gcloud functions deploy refresh_classes --entry-point main --runtime python37 --trigger-resource send_refresh --trigger-event google.pubsub.topic.publish --timeout 540s
+  - if [ "$TRAVIS_BRANCH" == "master" ];
+      then gcloud functions deploy refresh_classes --entry-point main --runtime python37 --trigger-resource send_refresh --trigger-event google.pubsub.topic.publish --timeout 540s;
+    fi
+  # can add other deploys for other branches/environments

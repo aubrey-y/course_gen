@@ -6,7 +6,7 @@
 
 # course_gen
 
-Batch process to regularly scrape course data from [Oscar](oscar.gatech.edu) which is persisted to Cloud MySQL database.
+Batch process to regularly scrape course data from [Oscar](https://oscar.gatech.edu) which is persisted to Cloud MySQL database.
 
 [![Build Status](https://travis-ci.org/aubrey-y/course_gen.svg?branch=master)](https://travis-ci.org/aubrey-y/course_gen)
 ![GitHub top language](https://img.shields.io/github/languages/top/aubrey-y/course_gen)
