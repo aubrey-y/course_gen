@@ -1,16 +1,13 @@
 import re
 import requests
-import sqlite3
-import logging
-import pathlib
+import sqlalchemy
+import os
+from google.cloud import logging
+from google.cloud.logging.resource import Resource
 from bs4 import BeautifulSoup
 from datetime import datetime
 from time import sleep, perf_counter
-from sqlite3 import Cursor
 from typing import List
-
-
-DB_PATH_FMT = "{}/db/classes.db"
 
 PRIMARY_TABLE_NAME = "CLASSES_MASTER"
 
@@ -23,48 +20,92 @@ END_IDX = 93437
 TARGET_URL_FMT = "https://oscar.gatech.edu/pls/bprod/bwckschd.p_disp_detail_sched?term_in={}&crn_in={}"
 
 
-def check_if_table_exists(cursor: Cursor):
-    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{PRIMARY_TABLE_NAME}';")
+def check_if_table_exists(db):
+    with db.connect() as cursor:
+        table_exists = cursor.execute(f"SHOW TABLES LIKE '{PRIMARY_TABLE_NAME}';")
 
-    if not cursor.fetchall():
-        cursor.execute(f"CREATE TABLE {PRIMARY_TABLE_NAME} ("
-                           f"id integer NOT NULL,"
-                           f"code text PRIMARY KEY,"
-                           f"name text NOT NULL,"
-                           f"credits real NOT NULL,"
-                           f"seats_capacity integer NOT NULL,"
-                           f"seats_actual integer NOT NULL,"
-                           f"seats_remaining integer NOT NULL,"
-                           f"waitlist_capacity integer NOT NULL,"
-                           f"waitlist_actual integer NOT NULL,"
-                           f"waitlist_remaining integer NOT NULL,"
-                           f"restrictions text,"
-                           f"prerequisites text,"
-                           f"last_updated text NOT NULL"
-                       f");")
+        if not table_exists.rowcount:
+            cursor.execute(f"CREATE TABLE {PRIMARY_TABLE_NAME} ("
+                           f"id INT PRIMARY KEY,"
+                           f"code VARCHAR(255) NOT NULL,"
+                           f"name VARCHAR(255) NOT NULL,"
+                           f"credits FLOAT NOT NULL,"
+                           f"seats_capacity INT NOT NULL,"
+                           f"seats_actual INT NOT NULL,"
+                           f"seats_remaining INT NOT NULL,"
+                           f"waitlist_capacity INT NOT NULL,"
+                           f"waitlist_actual INT NOT NULL,"
+                           f"waitlist_remaining INT NOT NULL,"
+                           f"restrictions TEXT(65535) ,"
+                           f"prerequisites TEXT(65535),"
+                           f"last_updated TIMESTAMP NOT NULL"
+                           f");")
 
 
-def upsert_sqlite(cursor: Cursor, id: str, code: str, name: str, credits: float, seats: List, waitlist: List,
-                  restrictions: str, prerequisites: str):
-    cursor.execute(
-        f"INSERT OR REPLACE INTO {PRIMARY_TABLE_NAME} (id, code, name, credits, seats_capacity, seats_actual, "
-        f"seats_remaining, waitlist_capacity, waitlist_actual, waitlist_remaining, restrictions, prerequisites, "
-        f"last_updated) "
-        f"VALUES (\"{id}\", \"{code}\", \"{name}\", {credits}, {seats[0]}, {seats[1]}, {seats[2]}, {waitlist[0]}, "
-        f"{waitlist[1]}, {waitlist[2]}, \"{restrictions}\", \"{prerequisites}\", "
-        f"\"{datetime.now().isoformat()[:-3]}\");")
+def upsert_mysql(db, id: str, code: str, name: str, credits: float, seats: List, waitlist: List,
+                 restrictions: str, prerequisites: str):
+    with db.connect() as cursor:
+        cursor.execute(
+            f"REPLACE INTO {PRIMARY_TABLE_NAME} (id, code, name, credits, seats_capacity, seats_actual, "
+            f"seats_remaining, waitlist_capacity, waitlist_actual, waitlist_remaining, restrictions, prerequisites, "
+            f"last_updated) "
+            f"VALUES (\"{id}\", \"{code}\", \"{name}\", {credits}, {seats[0]}, {seats[1]}, {seats[2]}, {waitlist[0]}, "
+            f"{waitlist[1]}, {waitlist[2]}, \"{restrictions}\", \"{prerequisites}\", "
+            f"\"{datetime.now()}\");")
 
 
 def main(data, context):
-    log = logging.getLogger("course_gen")
-    conn = sqlite3.connect(DB_PATH_FMT.format(pathlib.Path(__file__).parent.absolute()))
-    cursor = conn.cursor()
+    log_client = logging.Client()
 
+    log_name = 'cloudfunctions.googleapis.com%2Fcloud-functions'
+
+    res = Resource(type="cloud_function",
+                   labels={
+                       "function_name": "refresh_classes",
+                       "region": os.environ.get("FUNC_REGION")
+                   })
+    logger = log_client.logger(log_name.format(os.environ.get("PROJECT_ID")))
+
+    logger.log_text(f"Logger setup complete", resource=res, severity="INFO")
+
+    if os.environ.get("ENV") == "local":
+        db = sqlalchemy.create_engine(
+            sqlalchemy.engine.url.URL(
+                drivername="mysql+pymysql",
+                username=os.environ.get("DB_USER"),
+                password=os.environ.get("DB_PASS"),
+                host=os.environ.get("DB_HOST"),
+                port=3306,
+                database=PRIMARY_TABLE_NAME
+            ),
+            pool_size=5,
+            max_overflow=2,
+            pool_timeout=30,
+            pool_recycle=1800
+        )
+    else:
+        db = sqlalchemy.create_engine(
+            sqlalchemy.engine.url.URL(
+                drivername="mysql+pymysql",
+                username=os.environ.get("DB_USER"),
+                password=os.environ.get("DB_PASS"),
+                database=PRIMARY_TABLE_NAME,
+                query={"unix_socket": "/cloudsql/{}".format(os.environ.get("CLOUD_SQL_CONNECTION_NAME"))}
+            ),
+            pool_size=5,
+            max_overflow=2,
+            pool_timeout=30,
+            pool_recycle=1800
+        )
+    logger.log_text(f"db setup complete", resource=res, severity="INFO")
     start_time = perf_counter()
 
+    check_if_table_exists(db)
+    logger.log_text(f"table check complete", resource=res, severity="INFO")
+
     for i in range(START_IDX, END_IDX):
-        log.info("Checking class with id {}", i)
-        check_if_table_exists(cursor)
+        print(i)
+        logger.log_text(f"Checking class with id {i}", resource=res, severity="INFO")
 
         pg = requests.get(TARGET_URL_FMT.format(LATEST_TERM, i))
 
@@ -72,12 +113,13 @@ def main(data, context):
 
         if "exceeded the bandwidth limits" in html_content.text:
             while "exceeded the bandwidth limits" in html_content.text:
+                logger.log_text("Sleeping for 60s", resource=res, severity="INFO")
                 sleep(60)
-                log.info("Sleeping for 60s")
                 pg = requests.get(TARGET_URL_FMT.format(LATEST_TERM, i))
                 html_content = BeautifulSoup(pg.content, "html.parser")
         if "-" not in html_content.text:
-            log.info("skipping {}", i)
+            print(f"skipping {i}")
+            logger.log_text(f"skipping {i}", resource=res, severity="INFO")
             continue
 
         class_general = html_content.find_all("th", {"scope": "row"}, class_="ddlabel")[0].text
@@ -120,17 +162,11 @@ def main(data, context):
                 class_prerequisites = None
                 class_restrictions = None
 
-        # Send all collected class metadata to Sqlite
-        upsert_sqlite(cursor, class_id, class_code, class_name, class_credits, class_seats, class_waitlist_seats,
-                      class_restrictions, class_prerequisites)
+        # Send all collected class metadata
+        upsert_mysql(db, class_id, class_code, class_name, class_credits, class_seats, class_waitlist_seats,
+                     class_restrictions, class_prerequisites)
 
-    # Commit changes (previously only in memory) to .db file
-    conn.commit()
-
-    # Terminate connection to Sqlite
-    conn.close()
-
-    log.info("Total seconds elapsed: {}", perf_counter() - start_time)
+    logger.log_text(f"Total seconds elapsed: {perf_counter() - start_time}", resource=res, severity="INFO")
 
 
 if __name__ == '__main__':
