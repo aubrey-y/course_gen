@@ -66,8 +66,6 @@ def main(data, context):
                    })
     logger = log_client.logger(log_name.format(os.environ.get("PROJECT_ID")))
 
-    logger.log_text(f"Logger setup complete", resource=res, severity="INFO")
-
     if os.environ.get("ENV") == "local":
         db = sqlalchemy.create_engine(
             sqlalchemy.engine.url.URL(
@@ -97,11 +95,9 @@ def main(data, context):
             pool_timeout=30,
             pool_recycle=1800
         )
-    logger.log_text(f"db setup complete", resource=res, severity="INFO")
     start_time = perf_counter()
 
     check_if_table_exists(db)
-    logger.log_text(f"table check complete", resource=res, severity="INFO")
 
     for i in range(START_IDX, END_IDX):
         print(i)
