@@ -8,16 +8,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from time import sleep, perf_counter
 from typing import List
-
-PRIMARY_TABLE_NAME = "CLASSES_MASTER"
-
-LATEST_TERM = "202008"
-
-START_IDX = 80007
-
-END_IDX = 93437
-
-TARGET_URL_FMT = "https://oscar.gatech.edu/pls/bprod/bwckschd.p_disp_detail_sched?term_in={}&crn_in={}"
+from config import *
 
 
 def check_if_table_exists(db):
@@ -54,22 +45,21 @@ def upsert_mysql(db, id: str, code: str, name: str, credits: float, seats: List,
             f"\"{datetime.now()}\");")
 
 
-def main(data, context):
+def gen_google_cloud_logger(project_id):
     log_client = logging.Client()
-
-    log_name = 'cloudfunctions.googleapis.com%2Fcloud-functions'
 
     res = Resource(type="cloud_function",
                    labels={
                        "function_name": "refresh_classes",
                        "region": os.environ.get("FUNC_REGION")
                    })
-    logger = log_client.logger(log_name.format(os.environ.get("PROJECT_ID")))
 
-    logger.log_text(f"Logger setup complete", resource=res, severity="INFO")
+    return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(project_id)), res
 
-    if os.environ.get("ENV") == "local":
-        db = sqlalchemy.create_engine(
+
+def gen_sqlalchemy_engine(env):
+    if env == "local":
+        return sqlalchemy.create_engine(
             sqlalchemy.engine.url.URL(
                 drivername="mysql+pymysql",
                 username=os.environ.get("DB_USER"),
@@ -84,7 +74,7 @@ def main(data, context):
             pool_recycle=1800
         )
     else:
-        db = sqlalchemy.create_engine(
+        return sqlalchemy.create_engine(
             sqlalchemy.engine.url.URL(
                 drivername="mysql+pymysql",
                 username=os.environ.get("DB_USER"),
@@ -97,11 +87,16 @@ def main(data, context):
             pool_timeout=30,
             pool_recycle=1800
         )
-    logger.log_text(f"db setup complete", resource=res, severity="INFO")
+
+
+def main(data, context):
+    logger, res = gen_google_cloud_logger(os.environ.get("PROJECT_ID"))
+
+    db = gen_sqlalchemy_engine(os.environ.get("ENV"))
+
     start_time = perf_counter()
 
     check_if_table_exists(db)
-    logger.log_text(f"table check complete", resource=res, severity="INFO")
 
     for i in range(START_IDX, END_IDX):
         print(i)
