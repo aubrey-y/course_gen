@@ -2,17 +2,17 @@ import re
 import requests
 import firebase_admin
 import os
+import config
+import google.cloud.logging
 from firebase_admin import firestore
-from google.cloud import logging
 from google.cloud.logging.resource import Resource
 from bs4 import BeautifulSoup
 from datetime import datetime
 from time import sleep, perf_counter
-from config import *
 
 
-def gen_google_cloud_logger(project_id):
-    log_client = logging.Client()
+def gen_google_cloud_logger():
+    log_client = google.cloud.logging.Client()
 
     res = Resource(type="cloud_function",
                    labels={
@@ -20,25 +20,26 @@ def gen_google_cloud_logger(project_id):
                        "region": os.environ.get("FUNC_REGION")
                    })
 
-    return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(project_id)), res
+    return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(os.environ.get("DEFAULT_PROJECT_ID"))), res
 
 
 def main(data, context):
-    logger, res = gen_google_cloud_logger(os.environ.get("PROJECT_ID"))
+    logger, res = gen_google_cloud_logger()
 
     cred = firebase_admin.credentials.ApplicationDefault()
 
-    firebase_admin.initialize_app(cred, {"projectId": os.environ.get("PROJECT_ID")})
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(cred, {"projectId": os.environ.get("PROJECT_ID")})
 
     firebase_db = firestore.client()
 
     start_time = perf_counter()
 
-    for i in range(START_IDX, END_IDX):
+    for i in range(config.START_IDX, config.END_IDX):
         print(i)
         logger.log_text(f"Checking class with id {i}", resource=res, severity="INFO")
 
-        pg = requests.get(TARGET_URL_FMT.format(LATEST_TERM, i))
+        pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
 
         html_content = BeautifulSoup(pg.content, "html.parser")
 
@@ -46,7 +47,7 @@ def main(data, context):
             while "exceeded the bandwidth limits" in html_content.text:
                 logger.log_text("Sleeping for 60s", resource=res, severity="INFO")
                 sleep(60)
-                pg = requests.get(TARGET_URL_FMT.format(LATEST_TERM, i))
+                pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
                 html_content = BeautifulSoup(pg.content, "html.parser")
         if "-" not in html_content.text:
             print(f"skipping {i}")
@@ -94,7 +95,7 @@ def main(data, context):
                 class_restrictions = None
 
         # Send all collected class metadata
-        firebase_db.collection(u'{}'.format(PRIMARY_TABLE_NAME)).document(u'{}'.format(class_id)).set({
+        firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).document(u'{}'.format(class_id)).set({
             "id": class_id,
             "code": class_code,
             "name": class_name,
