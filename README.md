@@ -6,7 +6,7 @@
 
 # course_gen
 
-Batch process to regularly scrape course data from [Oscar](https://oscar.gatech.edu) which is persisted to Cloud MySQL database.
+Batch process to regularly scrape course data from [Oscar](https://oscar.gatech.edu) which is persisted to Cloud Firestore.
 
 [![Build Status](https://travis-ci.org/aubrey-y/course_gen.svg?branch=master)](https://travis-ci.org/aubrey-y/course_gen)
 ![GitHub top language](https://img.shields.io/github/languages/top/aubrey-y/course_gen)
@@ -22,10 +22,8 @@ For local development, you will need to:
 
 2. `pip install -r requirements.txt`
 
-3. Install [Cloud SQL Proxy Client](https://cloud.google.com/sql/docs/mysql/quickstart-proxy-test) and start proxy
+3. Setup [GOOGLE_AUTHENTICATION_CREDENTIALS](https://cloud.google.com/docs/authentication/getting-started)
 
-4. Setup [GOOGLE_AUTHENTICATION_CREDENTIALS](https://cloud.google.com/docs/authentication/getting-started)
+4. Acquire and set all IDE environment variables required to run locally (accessed by `os.environ.get` in `main.py`)
 
-5. Acquire and set all IDE environment variables required to run locally (accessed by `os.environ.get` in `main.py`)
-
-6. Run `main.py`
+5. Run `main.py`
