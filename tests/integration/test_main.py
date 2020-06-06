@@ -91,11 +91,11 @@ class TestMain(TestCase):
     def prepare_responses():
         responses.add_passthru("https://oauth2.googleapis.com/token")
 
-        with open(f"{os.path.dirname(os.path.abspath(__file__))}/80007.html") as pg_file:
+        with open(f"{os.path.dirname(os.path.abspath(__file__))}/data/80007.html") as pg_file:
             responses.add(method=responses.GET,
                           url=config.TARGET_URL_FMT.format(config.LATEST_TERM, config.START_IDX),
                           body=pg_file.read(), status=200)
-        with open(f"{os.path.dirname(os.path.abspath(__file__))}/80008.html") as pg_file:
+        with open(f"{os.path.dirname(os.path.abspath(__file__))}/data/80008.html") as pg_file:
             responses.add(method=responses.GET,
                           url=config.TARGET_URL_FMT.format(config.LATEST_TERM, config.START_IDX + 1),
                           body=pg_file.read(), status=200)
