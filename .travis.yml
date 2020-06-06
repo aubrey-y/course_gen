@@ -2,6 +2,9 @@ language: python
 python:
   - "3.7"
 
+services:
+  - docker
+
 cache:
   directories:
     - "$HOME/google-cloud-sdk/"
@@ -24,10 +27,18 @@ before_install:
 
 install:
   - gcloud config set project course-gen
-  - pip install -r requirements.txt
 
 script:
-  - pytest
+  - docker build -t course_gen:test
+      --build-arg FIREBASE_TOKEN=$FIREBASE_TOKEN
+      --build-arg PROJECT_ID=$PROJECT_ID  .
+  - docker run
+      --env PROJECT_ID
+      --env DEFAULT_PROJECT_ID
+      --env FUNC_REGION
+      --env ENV
+      --env GOOGLE_APPLICATION_CREDENTIALS=client-secret.json
+      --name course_gen_ctnr course_gen:test
   - if [ "$TRAVIS_BRANCH" == "master" ];
       then gcloud functions deploy refresh_classes --entry-point main --runtime python37 --trigger-resource send_refresh --trigger-event google.pubsub.topic.publish --timeout 540s;
     fi

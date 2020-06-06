@@ -1,52 +1,18 @@
 import re
 import requests
-import sqlalchemy
+import firebase_admin
 import os
-from google.cloud import logging
+import config
+import google.cloud.logging
+from firebase_admin import firestore
 from google.cloud.logging.resource import Resource
 from bs4 import BeautifulSoup
 from datetime import datetime
 from time import sleep, perf_counter
-from typing import List
-from config import *
 
 
-def check_if_table_exists(db):
-    with db.connect() as cursor:
-        table_exists = cursor.execute(f"SHOW TABLES LIKE '{PRIMARY_TABLE_NAME}';")
-
-        if not table_exists.rowcount:
-            cursor.execute(f"CREATE TABLE {PRIMARY_TABLE_NAME} ("
-                           f"id INT PRIMARY KEY,"
-                           f"code VARCHAR(255) NOT NULL,"
-                           f"name VARCHAR(255) NOT NULL,"
-                           f"credits FLOAT NOT NULL,"
-                           f"seats_capacity INT NOT NULL,"
-                           f"seats_actual INT NOT NULL,"
-                           f"seats_remaining INT NOT NULL,"
-                           f"waitlist_capacity INT NOT NULL,"
-                           f"waitlist_actual INT NOT NULL,"
-                           f"waitlist_remaining INT NOT NULL,"
-                           f"restrictions TEXT(65535) ,"
-                           f"prerequisites TEXT(65535),"
-                           f"last_updated TIMESTAMP NOT NULL"
-                           f");")
-
-
-def upsert_mysql(db, id: str, code: str, name: str, credits: float, seats: List, waitlist: List,
-                 restrictions: str, prerequisites: str):
-    with db.connect() as cursor:
-        cursor.execute(
-            f"REPLACE INTO {PRIMARY_TABLE_NAME} (id, code, name, credits, seats_capacity, seats_actual, "
-            f"seats_remaining, waitlist_capacity, waitlist_actual, waitlist_remaining, restrictions, prerequisites, "
-            f"last_updated) "
-            f"VALUES (\"{id}\", \"{code}\", \"{name}\", {credits}, {seats[0]}, {seats[1]}, {seats[2]}, {waitlist[0]}, "
-            f"{waitlist[1]}, {waitlist[2]}, \"{restrictions}\", \"{prerequisites}\", "
-            f"\"{datetime.now()}\");")
-
-
-def gen_google_cloud_logger(project_id):
-    log_client = logging.Client()
+def gen_google_cloud_logger():
+    log_client = google.cloud.logging.Client()
 
     res = Resource(type="cloud_function",
                    labels={
@@ -54,55 +20,26 @@ def gen_google_cloud_logger(project_id):
                        "region": os.environ.get("FUNC_REGION")
                    })
 
-    return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(project_id)), res
-
-
-def gen_sqlalchemy_engine(env):
-    if env == "local":
-        return sqlalchemy.create_engine(
-            sqlalchemy.engine.url.URL(
-                drivername="mysql+pymysql",
-                username=os.environ.get("DB_USER"),
-                password=os.environ.get("DB_PASS"),
-                host=os.environ.get("DB_HOST"),
-                port=3306,
-                database=PRIMARY_TABLE_NAME
-            ),
-            pool_size=5,
-            max_overflow=2,
-            pool_timeout=30,
-            pool_recycle=1800
-        )
-    else:
-        return sqlalchemy.create_engine(
-            sqlalchemy.engine.url.URL(
-                drivername="mysql+pymysql",
-                username=os.environ.get("DB_USER"),
-                password=os.environ.get("DB_PASS"),
-                database=PRIMARY_TABLE_NAME,
-                query={"unix_socket": "/cloudsql/{}".format(os.environ.get("CLOUD_SQL_CONNECTION_NAME"))}
-            ),
-            pool_size=5,
-            max_overflow=2,
-            pool_timeout=30,
-            pool_recycle=1800
-        )
+    return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(os.environ.get("DEFAULT_PROJECT_ID"))), res
 
 
 def main(data, context):
-    logger, res = gen_google_cloud_logger(os.environ.get("PROJECT_ID"))
+    logger, res = gen_google_cloud_logger()
 
-    db = gen_sqlalchemy_engine(os.environ.get("ENV"))
+    cred = firebase_admin.credentials.ApplicationDefault()
+
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(cred, {"projectId": os.environ.get("PROJECT_ID")})
+
+    firebase_db = firestore.client()
 
     start_time = perf_counter()
 
-    check_if_table_exists(db)
-
-    for i in range(START_IDX, END_IDX):
+    for i in range(config.START_IDX, config.END_IDX):
         print(i)
         logger.log_text(f"Checking class with id {i}", resource=res, severity="INFO")
 
-        pg = requests.get(TARGET_URL_FMT.format(LATEST_TERM, i))
+        pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
 
         html_content = BeautifulSoup(pg.content, "html.parser")
 
@@ -110,7 +47,7 @@ def main(data, context):
             while "exceeded the bandwidth limits" in html_content.text:
                 logger.log_text("Sleeping for 60s", resource=res, severity="INFO")
                 sleep(60)
-                pg = requests.get(TARGET_URL_FMT.format(LATEST_TERM, i))
+                pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
                 html_content = BeautifulSoup(pg.content, "html.parser")
         if "-" not in html_content.text:
             print(f"skipping {i}")
@@ -158,8 +95,25 @@ def main(data, context):
                 class_restrictions = None
 
         # Send all collected class metadata
-        upsert_mysql(db, class_id, class_code, class_name, class_credits, class_seats, class_waitlist_seats,
-                     class_restrictions, class_prerequisites)
+        firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).document(u'{}'.format(class_id)).set({
+            "id": class_id,
+            "code": class_code,
+            "name": class_name,
+            "credits": class_credits,
+            "seats": {
+                "capacity": class_seats[0],
+                "actual": class_seats[1],
+                "remaining": class_seats[2]
+            },
+            "waitlist": {
+                "capacity": class_waitlist_seats[0],
+                "actual": class_waitlist_seats[1],
+                "remaining": class_waitlist_seats[2]
+            },
+            "restrictions": class_restrictions,
+            "prerequisites": class_prerequisites,
+            "last_updated": datetime.now()
+        })
 
     logger.log_text(f"Total seconds elapsed: {perf_counter() - start_time}", resource=res, severity="INFO")
 
