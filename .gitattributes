@@ -1,1 +1,1 @@
-tests/integration/data/* linguist-vendored=false
+tests/integration/data/* -linguist-vendored
