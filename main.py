@@ -23,6 +23,31 @@ def gen_google_cloud_logger():
     return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(os.environ.get("DEFAULT_PROJECT_ID"))), res
 
 
+def requests_connectionerror_bypass(i, logger, res):
+    pg = None
+    while not pg:
+        try:
+            pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
+        except requests.exceptions.ConnectionError:
+            logger.log_text("Sleeping for 5s", resource=res, severity="INFO")
+            sleep(5)
+
+    return pg
+
+
+def requests_bandwith_bypass(pg, i, logger, res):
+    html_content = BeautifulSoup(pg.content, "html.parser")
+
+    if "exceeded the bandwidth limits" in html_content.text:
+        while "exceeded the bandwidth limits" in html_content.text:
+            logger.log_text("Sleeping for 60s", resource=res, severity="INFO")
+            sleep(60)
+            pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
+            html_content = BeautifulSoup(pg.content, "html.parser")
+
+    return html_content
+
+
 def main(data, context):
     logger, res = gen_google_cloud_logger()
 
@@ -39,16 +64,10 @@ def main(data, context):
         print(i)
         logger.log_text(f"Checking class with id {i}", resource=res, severity="INFO")
 
-        pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
+        pg = requests_connectionerror_bypass(i, logger, res)
 
-        html_content = BeautifulSoup(pg.content, "html.parser")
+        html_content = requests_bandwith_bypass(pg, i, logger, res)
 
-        if "exceeded the bandwidth limits" in html_content.text:
-            while "exceeded the bandwidth limits" in html_content.text:
-                logger.log_text("Sleeping for 60s", resource=res, severity="INFO")
-                sleep(60)
-                pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
-                html_content = BeautifulSoup(pg.content, "html.parser")
         if "-" not in html_content.text:
             print(f"skipping {i}")
             logger.log_text(f"skipping {i}", resource=res, severity="INFO")
