@@ -1,11 +1,13 @@
 import re
 import requests
+import random
 import firebase_admin
 import os
 import config
 import google.cloud.logging
 from firebase_admin import firestore
 from google.cloud.logging.resource import Resource
+from fake_useragent import UserAgent
 from bs4 import BeautifulSoup
 from datetime import datetime
 from time import sleep, perf_counter
@@ -23,13 +25,12 @@ def gen_google_cloud_logger():
     return log_client.logger('cloudfunctions.googleapis.com%2Fcloud-functions'.format(os.environ.get("DEFAULT_PROJECT_ID"))), res
 
 
-def requests_connectionerror_bypass(i, logger, res):
+def requests_connectionerror_bypass(i, ua):
     pg = None
     while not pg:
         try:
-            pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i))
+            pg = requests.get(config.TARGET_URL_FMT.format(config.LATEST_TERM, i), headers={"User-Agent": ua.random})
         except requests.exceptions.ConnectionError:
-            logger.log_text("Sleeping for 5s", resource=res, severity="INFO")
             sleep(5)
 
     return pg
@@ -48,6 +49,27 @@ def requests_bandwith_bypass(pg, i, logger, res):
     return html_content
 
 
+def fetch_proxies(ua):
+    proxy_pg = requests.get("https://www.sslproxies.org/", headers={"User-Agent": ua.random})
+
+    proxies = []
+
+    proxy_bs = BeautifulSoup(proxy_pg.content, 'html.parser')
+    proxies_table = proxy_bs.find(id='proxylisttable')
+
+    for row in proxies_table.tbody.find_all('tr'):
+        proxies.append({
+            'ip': row.find_all('td')[0].string,
+            'port': row.find_all('td')[1].string
+        })
+
+    return proxies
+
+
+def find_new_proxy(proxies):
+    return proxies[random.randint(0, len(proxies) - 1)]
+
+
 def main(data, context):
     logger, res = gen_google_cloud_logger()
 
@@ -58,13 +80,15 @@ def main(data, context):
 
     firebase_db = firestore.client()
 
+    user_agent = UserAgent()
+
     start_time = perf_counter()
 
     for i in range(config.START_IDX, config.END_IDX):
         print(i)
         logger.log_text(f"Checking class with id {i}", resource=res, severity="INFO")
 
-        pg = requests_connectionerror_bypass(i, logger, res)
+        pg = requests_connectionerror_bypass(i, user_agent)
 
         html_content = requests_bandwith_bypass(pg, i, logger, res)
 
@@ -84,7 +108,7 @@ def main(data, context):
 
         class_name = class_general_delimited[0]
 
-        class_id = class_general_delimited[1]
+        class_id = int(class_general_delimited[1])
 
         class_code = class_general_delimited[2]
 
@@ -92,9 +116,9 @@ def main(data, context):
 
         class_credits = float(re.search("\d+\.\d+(?=\s+Credits)", class_dddefault).group(0))
 
-        class_seats = [re.search("Seats (\d+) (\d+) (\d+)", class_dddefault).group(x) for x in range(1, 4)]
+        class_seats = [int(re.search("Seats (-*\d+) (-*\d+) (-*\d+)", class_dddefault).group(x)) for x in range(1, 4)]
 
-        class_waitlist_seats = [re.search("Waitlist Seats (\d+) (\d+) (\d+)", class_dddefault).group(x) for x in
+        class_waitlist_seats = [int(re.search("Waitlist Seats (-*\d+) (-*\d+) (-*\d+)", class_dddefault).group(x)) for x in
                                 range(1, 4)]
 
         # Regex search method depends on prerequisites and restrictions combination
@@ -113,8 +137,7 @@ def main(data, context):
                 class_prerequisites = None
                 class_restrictions = None
 
-        # Send all collected class metadata
-        firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).document(u'{}'.format(class_id)).set({
+        course_dict = {
             "id": class_id,
             "code": class_code,
             "name": class_name,
@@ -132,7 +155,21 @@ def main(data, context):
             "restrictions": class_restrictions,
             "prerequisites": class_prerequisites,
             "last_updated": datetime.now()
-        })
+        }
+
+        # Send all collected class metadata
+        firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).document(u'{}'.format(class_id)).set(course_dict)
+
+        all_courses_doc = firebase_db.collection(u'{}'.format(config.SECONDARY_TABLE_NAME)).document(u'{}'.format("all_courses")).get()
+
+        if all_courses_doc.exists:
+            all_courses = all_courses_doc.to_dict()
+            all_courses[str(class_id)] = course_dict
+            firebase_db.collection(u'{}'.format(config.SECONDARY_TABLE_NAME)).document(u'{}'.format("all_courses")).set(all_courses)
+        else:
+            firebase_db.collection(u'{}'.format(config.SECONDARY_TABLE_NAME)).document(u'{}'.format("all_courses")).set({
+                str(class_id): course_dict
+            })
 
     logger.log_text(f"Total seconds elapsed: {perf_counter() - start_time}", resource=res, severity="INFO")
 

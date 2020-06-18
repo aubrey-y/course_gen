@@ -25,10 +25,10 @@ class TestMain(TestCase):
     def test_main(self):
         self.prepare_responses()
 
-        test_collection = self.firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).stream()
+        master_collection = self.firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).stream()
 
         # Collection should be empty
-        for _ in test_collection:
+        for _ in master_collection:
             assert False
 
         with mock.patch("main.datetime") as datetime_mock:
@@ -37,25 +37,24 @@ class TestMain(TestCase):
 
             main("data", "context")
 
-        test_collection = self.firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).stream()
+        master_collection = self.firebase_db.collection(u'{}'.format(config.PRIMARY_TABLE_NAME)).stream()
 
-        actual = []
+        master_actual = []
         # Collection should contain expected
-        for document in test_collection:
-            actual.append(document.to_dict())
+        for document in master_collection:
+            master_actual.append(document.to_dict())
 
-        expected = [
-            {
-                'id': '80007',
+        class_a = {
+                'id': 80007,
                 'seats': {
-                    'remaining': '0',
-                    'actual': '57',
-                    'capacity': '58'
+                    'remaining': 0,
+                    'actual': 57,
+                    'capacity': 58
                 },
                 'waitlist': {
-                    'remaining': '3',
-                    'actual': '27',
-                    'capacity': '30'
+                    'remaining': 3,
+                    'actual': 27,
+                    'capacity': 30
                 },
                 'name': 'Class A',
                 'prerequisites': 'a prerequisite',
@@ -63,17 +62,19 @@ class TestMain(TestCase):
                 'code': 'ABC 123',
                 'last_updated': DatetimeWithNanoseconds(2020, 6, 1, 0, 0, 0, 0, tzinfo=UTC),
                 'restrictions': 'a restriction'
-            }, {
-                'id': '80008',
+        }
+
+        class_b = {
+                'id': 80008,
                 'seats': {
-                    'remaining': '0',
-                    'actual': '55',
-                    'capacity': '55'
+                    'remaining': 0,
+                    'actual': 55,
+                    'capacity': 55
                 },
                 'waitlist': {
-                    'remaining': '28',
-                    'actual': '2',
-                    'capacity': '30'
+                    'remaining': 28,
+                    'actual': 2,
+                    'capacity': 30
                 },
                 'name': 'Class B',
                 'prerequisites': 'b prerequisites',
@@ -81,11 +82,26 @@ class TestMain(TestCase):
                 'code': 'CBA 321',
                 'last_updated': DatetimeWithNanoseconds(2020, 6, 1, 0, 0, 0, 0, tzinfo=UTC),
                 'restrictions': 'b restrictions'
-            }
-        ]
+        }
+
+        master_expected = [class_a, class_b]
 
         self.maxDiff = None
-        self.assertCountEqual(expected, actual)
+        self.assertCountEqual(master_expected, master_actual)
+
+        all_actual = []
+
+        all_collection = self.firebase_db.collection(u'{}'.format(config.SECONDARY_TABLE_NAME)).stream()
+        # Collection should contain expected
+        for document in all_collection:
+            all_actual.append(document.to_dict())
+
+        all_expected = [{
+            "80007": class_a,
+            "80008": class_b
+        }]
+
+        self.assertCountEqual(all_expected, all_actual)
 
     @staticmethod
     def prepare_responses():
